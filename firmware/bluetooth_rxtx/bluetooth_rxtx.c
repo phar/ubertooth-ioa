@@ -116,7 +116,18 @@ int16_t rssi_iir[79] = {0};
 char unpacked[DMA_SIZE*8*2];
 
 
-char scrap_buff[DMA_SIZE*8];
+#define MAX_PACKET_LEN 300 //bigger then i need i think
+
+typedef struct packet_buff_t{
+	u16 xmit_delay;
+	u32 aa;
+	u16 header;
+	u8  len;
+	u8  data[MAX_PACKET_LEN];
+}packet_buff_t;
+
+//char scrap_buff[DMA_SIZE*8];
+packet_buff_t PBUFFER;
 
 
 volatile u8 mode = MODE_IDLE;
@@ -318,17 +329,26 @@ static int vendor_request_handler(u8 request, u16 *request_params, u8 *data, int
 	u8 length; // string length
 	usb_pkt_rx *p = NULL;
 	u16 reg_val;
+	packet_buff_t *pbuff;
 
 	switch (request) {
 
 	case UBERTOOTH_SET_BUFFER: //hack of the moment for  testing  my code add in
-		memcpy(&scrap_buff[(request * DMA_SIZE) % sizeof(scrap_buff)],&data,*data_len);
+		memcpy(&PBUFFER, data, data_len > sizeof(PBUFFER)?sizeof(PBUFFER):data_len);		
 		*data_len = 0; 
 		break;
 
 	case UBERTOOTH_GET_BUFFER: //hack of the moment for  testing  my code add ins
-		memcpy(&scrap_buff[(request * DMA_SIZE) % sizeof(scrap_buff)],&data,*data_len);
-		*data_len = DMA_SIZE; 
+		memcpy(data,&PBUFFER,sizeof(packet_buff_t)); 
+		*data_len = sizeof(packet_buff_t);
+		break;
+	
+	case UBERTOOTH_TX_BUFFER:
+		break;
+
+	case UBERTOOTH_TX_BUFFER_LE:
+		le_transmit(PBUFFER.aa, PBUFFER.len, PBUFFER.data);
+//i know its not this easy, but its a start
 		break;
 
 	case UBERTOOTH_PING:
@@ -2224,30 +2244,6 @@ void bt_slave_le() {
 
 
 
-void le_xmit_from_buff(u32 aa, u8 len, u8 *data,u8 fix_crc){
-
-
-        // copy the user-specified mac address
-        for (i = 0; i < 6; ++i)
-                adv_ind[i+2] = slave_mac_address[5-i];
-
-	if(fix_crc){
-	        calc_crc = btle_calc_crc(le.crc_init_reversed, adv_ind, adv_ind_len);
-	        adv_ind[adv_ind_len+0] = (calc_crc >>  0) & 0xff;
-	        adv_ind[adv_ind_len+1] = (calc_crc >>  8) & 0xff;
-       		adv_ind[adv_ind_len+2] = (calc_crc >> 16) & 0xff;
-	}
-
-	ICER0 = ICER0_ICE_USB;
-	ICER0 = ICER0_ICE_DMA;
-	le_transmit(0x8e89bed6, adv_ind_len+3, adv_ind);
-	ISER0 = ISER0_ISE_USB;
-	ISER0 = ISER0_ISE_DMA;
-//	msleep(100);
-
-}
-
-
 void specan_setup(){
 	RXLED_SET;
 
@@ -2264,24 +2260,6 @@ void specan_setup(){
 	while (!(cc2400_status() & XOSC16M_STABLE));
 	while ((cc2400_status() & FS_LOCK));
 }
-
-
-
-/* spectrum analysis */
-void specan(){
-
-	RXLED_SET;
-
-	queue_init();
-	specan_setup();
-
-	while (requested_mode == MODE_SPECAN) {
-		specan_single();
-	}
-	mode = MODE_IDLE;
-	RXLED_CLR;
-}
-
 
 
 
@@ -2316,6 +2294,25 @@ void specan_single(){
 		while ((cc2400_status() & FS_LOCK));
 	}
 }
+
+
+
+/* spectrum analysis */
+void specan(){
+
+	RXLED_SET;
+
+	queue_init();
+	specan_setup();
+
+	while (requested_mode == MODE_SPECAN) {
+		specan_single();
+	}
+	mode = MODE_IDLE;
+	RXLED_CLR;
+}
+
+
 
 
 /* LED based spectrum analysis */
@@ -2391,6 +2388,8 @@ int main()
 	ubertooth_init();
 	clkn_init();
 	ubertooth_usb_init(vendor_request_handler);
+
+	memset(&PBUFFER,0x00,sizeof(packet_buff_t));
 
 	while (1) {
 		handle_usb(clkn);
